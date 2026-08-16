@@ -38,9 +38,9 @@ class ASREngine:
     def _select_dtype(self) -> torch.dtype:
         if config.TORCH_DTYPE == "bfloat16":
             return torch.bfloat16
-        elif config.TORCH_DTYPE == "float16":
+        elif config.TORCH_DTYPE in ("float16", "fp16", "int8", "int4"):
             return torch.float16
-        elif config.TORCH_DTYPE == "float32":
+        elif config.TORCH_DTYPE in ("float32", "fp32"):
             return torch.float32
 
         # Auto selection: float16 is universally supported across Pascal (P100), Turing (T4), and Ampere
@@ -49,21 +49,29 @@ class ASREngine:
         return torch.float32
 
     def _load_model(self):
-        logger.info(f"Loading ASR model '{self.model_name}' on device '{self.device}' with dtype '{self.dtype}'...")
+        logger.info(f"Loading ASR model '{self.model_name}' on device '{self.device}' with dtype '{self.dtype}' (Quantization: {config.QUANTIZATION})...")
         start_time = time.perf_counter()
 
         try:
-            device_map = None if self.device == "cuda" else self.device
-            
+            device_map = "auto" if self.device == "cuda" else self.device
+            kwargs = {
+                "token": config.HF_TOKEN,
+                "dtype": self.dtype,
+                "device_map": device_map
+            }
+
+            if config.QUANTIZATION in ("8bit", "int8"):
+                kwargs["load_in_8bit"] = True
+            elif config.QUANTIZATION in ("4bit", "int4"):
+                kwargs["load_in_4bit"] = True
+
             # Load with HF Token
             self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
                 self.model_name,
-                token=config.HF_TOKEN,
-                dtype=self.dtype,
-                device_map=device_map
+                **kwargs
             )
 
-            if self.device == "cuda":
+            if self.device == "cuda" and not (kwargs.get("load_in_8bit") or kwargs.get("load_in_4bit")):
                 self.model.model = self.model.model.to("cuda")
 
             load_elapsed = time.perf_counter() - start_time

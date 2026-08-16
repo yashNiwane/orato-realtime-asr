@@ -27,6 +27,7 @@ SAMPLE_RATE = 16000
 # Device settings
 DEVICE = os.getenv("DEVICE", "auto")  # "auto", "cuda", "cpu"
 TORCH_DTYPE = os.getenv("TORCH_DTYPE", "auto")  # "auto", "bfloat16", "float16", "float32"
+QUANTIZATION = os.getenv("QUANTIZATION", "none").lower()  # "none", "int8", "8bit", "int4", "4bit"
 
 # Realtime Streaming Settings
 STREAM_CHUNK_DURATION = float(os.getenv("STREAM_CHUNK_DURATION", "0.4"))  # 400ms per interim decode for rapid updates
