@@ -1,6 +1,7 @@
 import uuid
 import json
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -21,7 +22,7 @@ logger = logging.getLogger("ASRServer")
 async def lifespan(app: FastAPI):
     logger.info("Initializing ASR Engine...")
     engine = ASREngine.get_instance()
-    logger.info(f"ASR Service Ready! Model: {config.MODEL_NAME_OR_PATH} on {engine.device}")
+    logger.info(f"ASR Service Ready! Model: {config.MODEL_NAME_OR_PATH} on {engine.device} ({engine.dtype})")
     yield
     logger.info("Shutting down ASR Service...")
 
@@ -108,44 +109,80 @@ async def websocket_transcribe(
         language=language or config.LANGUAGE
     )
 
-    logger.info(f"WebSocket client connected: session={session_id}, language={session.language}")
+    logger.info(f"[WS CONNECT] session={session_id}, language={session.language}, client={websocket.client}")
     
     await websocket.send_json({
         "type": "connected",
         "session_id": session_id,
         "model": config.MODEL_NAME_OR_PATH,
         "language": session.language,
-        "sample_rate": config.SAMPLE_RATE
+        "sample_rate": config.SAMPLE_RATE,
+        "device": engine.device
     })
+
+    # Thread-safe async queue for non-blocking processing
+    audio_queue = asyncio.Queue(maxsize=100)
+    stop_event = asyncio.Event()
+
+    async def sender_worker():
+        """Background worker that pulls audio from queue and runs inference without blocking WebSocket I/O"""
+        while not stop_event.is_set():
+            try:
+                pcm_chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            try:
+                # Run inference in worker thread pool so event loop is completely free for ping/pong
+                loop = asyncio.get_running_loop()
+                events = await loop.run_in_executor(None, session.process_chunk, pcm_chunk)
+                
+                for event in events:
+                    if websocket.client_state.name == "CONNECTED":
+                        logger.info(f"[WS EVENT -> {session_id}] type={event.get('type')}, text='{event.get('text', '')}', latency={event.get('latency_ms')}ms")
+                        await websocket.send_json(event)
+            except Exception as e:
+                logger.error(f"[WS PROCESS ERROR {session_id}]: {e}", exc_info=True)
+
+    worker_task = asyncio.create_task(sender_worker())
 
     try:
         while True:
             message = await websocket.receive()
             
+            if message["type"] == "websocket.disconnect":
+                logger.info(f"[WS DISCONNECT MSG] session={session_id}")
+                break
+
             # Binary PCM Audio Stream
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
                 pcm_chunk = ASREngine.bytes_to_pcm16k(raw_bytes)
-                events = session.process_chunk(pcm_chunk)
-                for event in events:
-                    await websocket.send_json(event)
+                if not audio_queue.full():
+                    audio_queue.put_nowait(pcm_chunk)
+                else:
+                    # Drop oldest if congested
+                    try:
+                        audio_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    audio_queue.put_nowait(pcm_chunk)
 
             # JSON Control Messages
             elif "text" in message and message["text"]:
                 try:
                     payload = json.loads(message["text"])
                     action = payload.get("action")
+                    logger.info(f"[WS ACTION {session_id}] action={action}")
 
-                    if action == "audio" and "data" in payload:
-                        import base64
-                        raw_bytes = base64.b64decode(payload["data"])
-                        pcm_chunk = ASREngine.bytes_to_pcm16k(raw_bytes)
-                        events = session.process_chunk(pcm_chunk)
-                        for event in events:
-                            await websocket.send_json(event)
+                    if action == "ping":
+                        await websocket.send_json({"type": "pong"})
 
                     elif action == "flush":
-                        events = session.flush()
+                        loop = asyncio.get_running_loop()
+                        events = await loop.run_in_executor(None, session.flush)
                         for event in events:
                             await websocket.send_json(event)
 
@@ -159,25 +196,17 @@ async def websocket_transcribe(
                             "type": "reset_ack",
                             "session_id": session_id
                         })
-
-                    elif action == "set_language":
-                        new_lang = payload.get("language")
-                        if new_lang:
-                            session.language = new_lang
-                            await websocket.send_json({
-                                "type": "language_updated",
-                                "language": new_lang
-                            })
                 except json.JSONDecodeError:
                     pass
 
-            if message["type"] == "websocket.disconnect":
-                break
-                
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket client disconnected: session={session_id}")
+    except WebSocketDisconnect as e:
+        logger.info(f"[WS CLIENT CLOSED] session={session_id}, code={e.code}, reason={e.reason}")
     except Exception as e:
-        logger.error(f"WebSocket error in session {session_id}: {e}", exc_info=True)
+        logger.error(f"[WS UNHANDLED ERROR] session={session_id}: {e}", exc_info=True)
+    finally:
+        stop_event.set()
+        worker_task.cancel()
+        logger.info(f"[WS CLEANUP COMPLETE] session={session_id}")
 
 
 # Mount Static Files for UI

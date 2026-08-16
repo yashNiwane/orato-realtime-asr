@@ -37,6 +37,7 @@ let isRecording = false;
 let confirmedUtterances = [];
 let analyser = null;
 let animFrameId = null;
+let pingInterval = null;
 let activeBaseUrl = localStorage.getItem("orato_backend_url") || "";
 
 if (activeBaseUrl && customEndpointInput) {
@@ -80,9 +81,15 @@ function getHttpBaseUrl() {
 function initWebSocket() {
     if (ws) {
         try { ws.close(); } catch(e){}
+        ws = null;
+    }
+    if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
     }
 
     const wsUrl = getWsUrl();
+    console.log("[WS] Connecting to:", wsUrl);
     connectionStatus.className = "status-chip";
     statusText.textContent = "Connecting...";
 
@@ -91,9 +98,17 @@ function initWebSocket() {
         ws.binaryType = "arraybuffer";
 
         ws.onopen = () => {
+            console.log("[WS] Connected successfully!");
             connectionStatus.className = "status-chip connected";
             statusText.textContent = activeBaseUrl ? "Connected (Remote GPU)" : "Connected (Local)";
             updateBackendInfo();
+
+            // Send keepalive ping every 5 seconds to prevent tunnel timeouts
+            pingInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: "ping" }));
+                }
+            }, 5000);
         };
 
         ws.onmessage = (event) => {
@@ -105,13 +120,21 @@ function initWebSocket() {
             }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (e) => {
+            console.warn(`[WS] Disconnected: code=${e.code}, reason=${e.reason}`);
             connectionStatus.className = "status-chip disconnected";
-            statusText.textContent = "Disconnected (Retrying...)";
+            statusText.textContent = "Disconnected (Reconnecting...)";
+            if (pingInterval) {
+                clearInterval(pingInterval);
+                pingInterval = null;
+            }
+            if (!isRecording) {
+                setTimeout(initWebSocket, 2500);
+            }
         };
 
         ws.onerror = (err) => {
-            console.error("WebSocket error:", err);
+            console.error("[WS] Error:", err);
             connectionStatus.className = "status-chip disconnected";
             statusText.textContent = "Connection Failed";
         };
@@ -122,7 +145,7 @@ function initWebSocket() {
 
 function handleServerMessage(data) {
     if (data.type === "connected") {
-        statBackend.textContent = (data.model || "Orato ASR").split("/").pop().split("\\").pop();
+        statBackend.textContent = ((data.model || "Orato ASR").split("/").pop().split("\\").pop()) + (data.device ? ` (${data.device.toUpperCase()})` : "");
     } else if (data.type === "speech_start") {
         vadBadge.className = "vad-badge speaking";
         vadBadge.textContent = "Speaking";
@@ -180,6 +203,12 @@ function updateUtteranceCount() {
 
 // Start Microphone Capture
 async function startRecording() {
+    // If WS is not connected, reconnect first
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        initWebSocket();
+        await new Promise(r => setTimeout(r, 400));
+    }
+
     try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -200,13 +229,13 @@ async function startRecording() {
         analyser.fftSize = 256;
         source.connect(analyser);
 
-        // 2048 buffer size gives ~128ms per chunk at 16kHz for instant reactivity
-        scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1);
+        // 4096 samples = 256ms chunk duration at 16kHz
+        scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
         source.connect(scriptProcessor);
         scriptProcessor.connect(audioContext.destination);
 
         scriptProcessor.onaudioprocess = (e) => {
-            if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!isRecording) return;
 
             const inputData = e.inputBuffer.getChannelData(0);
             
@@ -219,14 +248,15 @@ async function startRecording() {
             const level = Math.min(100, Math.round(rms * 500));
             vuBar.style.width = `${level}%`;
 
-            // Convert to 16-bit PCM binary
-            const pcm16 = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[i]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // Convert to 16-bit PCM binary
+                const pcm16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    const s = Math.max(-1, Math.min(1, inputData[i]));
+                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                ws.send(pcm16.buffer);
             }
-
-            ws.send(pcm16.buffer);
         };
 
         isRecording = true;
@@ -328,6 +358,9 @@ async function handleFileUpload(file) {
         const base = getHttpBaseUrl();
         const response = await fetch(`${base}/api/v1/transcribe`, {
             method: "POST",
+            headers: {
+                "ngrok-skip-browser-warning": "true"
+            },
             body: formData
         });
         const elapsed = Math.round(performance.now() - startTime);
@@ -450,7 +483,7 @@ function escapeHtml(text) {
 
 function updateBackendInfo() {
     const base = getHttpBaseUrl();
-    fetch(`${base}/health`)
+    fetch(`${base}/health`, { headers: { "ngrok-skip-browser-warning": "true" } })
         .then(r => r.json())
         .then(data => {
             if (data.model) {
