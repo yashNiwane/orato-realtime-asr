@@ -1,0 +1,10 @@
+.env
+model_weights/
+_temp_parts/
+__pycache__/
+*.pyc
+sample_test.wav
+test_audio.wav
+test.m4a
+kaggle_deploy/
+.cache/

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orato Hindi Realtime ASR Service</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo-badge">
+                    <span class="pulse-dot"></span>
+                    <span class="logo-text">ORATO ASR</span>
+                </div>
+                <h1 class="header-title">Hindi & Hinglish Realtime Speech Recognition</h1>
+            </div>
+            <div class="header-right">
+                <div class="status-chip" id="connectionStatus">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">Connecting...</span>
+                </div>
+                <div class="model-badge">
+                    <span class="model-name">orato-asr-hindi-v1</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="main-content">
+            <!-- Left Panel: Live Stream Controls & Waveform -->
+            <section class="control-panel">
+                <div class="card glass-card stream-card">
+                    <div class="card-header">
+                        <h2>Live Audio Stream</h2>
+                        <div class="language-selector-wrap">
+                            <label for="languageSelect">Language:</label>
+                            <select id="languageSelect" class="styled-select">
+                                <option value="Hindi" selected>Hindi (हिन्दी / Hinglish)</option>
+                                <option value="English">English</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Audio Visualizer Canvas -->
+                    <div class="visualizer-wrapper">
+                        <canvas id="waveformCanvas" width="600" height="140"></canvas>
+                        <div class="audio-metrics">
+                            <div class="metric-item">
+                                <span class="metric-label">Input Level</span>
+                                <div class="vu-meter">
+                                    <div class="vu-bar" id="vuBar"></div>
+                                </div>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">VAD State</span>
+                                <span class="vad-badge" id="vadBadge">Idle</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Controls -->
+                    <div class="controls-action-bar">
+                        <button id="micToggleBtn" class="btn btn-primary btn-record">
+                            <svg class="icon mic-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                            <span id="recordBtnText">Start Realtime Mic</span>
+                        </button>
+
+                        <button id="flushBtn" class="btn btn-secondary" title="Flush buffer and finalize utterance" disabled>
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            Flush Utterance
+                        </button>
+                    </div>
+                </div>
+
+                <!-- File Upload / Batch Transcribe Card -->
+                <div class="card glass-card upload-card">
+                    <div class="card-header">
+                        <h3>Audio File Transcription</h3>
+                        <span class="sub-badge">WAV / MP3 / M4A / WebM</span>
+                    </div>
+                    <div class="dropzone" id="dropZone">
+                        <input type="file" id="audioFileInput" accept="audio/*" class="file-input-hidden">
+                        <div class="dropzone-content">
+                            <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <p class="dropzone-main-text">Drag & drop audio file or <span class="highlight">browse</span></p>
+                            <p class="dropzone-sub-text">16kHz mono recommended • Max 50MB</p>
+                        </div>
+                    </div>
+                    <div class="upload-progress-bar-wrap" id="uploadProgressWrap" style="display: none;">
+                        <div class="upload-progress-bar" id="uploadProgressBar"></div>
+                        <span class="upload-progress-text" id="uploadProgressText">Transcribing file...</span>
+                    </div>
+                </div>
+
+                <!-- Quick Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-title">Latency</span>
+                        <span class="stat-value" id="statLatency">-- ms</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-title">Sample Rate</span>
+                        <span class="stat-value">16,000 Hz</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-title">Backend</span>
+                        <span class="stat-value" id="statBackend">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Live Transcripts -->
+            <section class="transcript-panel">
+                <div class="card glass-card transcript-card">
+                    <div class="card-header">
+                        <div class="title-with-count">
+                            <h2>Live Transcript</h2>
+                            <span class="bubble-count" id="utteranceCount">0 utterances</span>
+                        </div>
+                        <div class="header-actions">
+                            <button id="copyBtn" class="btn btn-ghost" title="Copy transcript to clipboard">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                                Copy
+                            </button>
+                            <button id="clearBtn" class="btn btn-ghost" title="Clear transcripts">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Live Partial Stream Box -->
+                    <div class="live-stream-box" id="liveStreamBox">
+                        <div class="live-stream-badge">
+                            <span class="stream-pulse"></span>
+                            STREAMING INTERIM
+                        </div>
+                        <p class="live-interim-text devanagari-font" id="interimText">Listening for Hindi / Hinglish speech...</p>
+                    </div>
+
+                    <!-- Confirmed Sentences List -->
+                    <div class="transcript-timeline" id="transcriptTimeline">
+                        <div class="empty-state" id="emptyState">
+                            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.2">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                            <p>Press <strong>Start Realtime Mic</strong> or upload an audio file to see transcriptions in real-time.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
