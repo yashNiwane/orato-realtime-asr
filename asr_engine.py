@@ -43,9 +43,9 @@ class ASREngine:
         elif config.TORCH_DTYPE == "float32":
             return torch.float32
 
-        # Auto selection
+        # Auto selection: float16 is universally supported across Pascal (P100), Turing (T4), and Ampere
         if self.device == "cuda":
-            return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            return torch.float16
         return torch.float32
 
     def _load_model(self):
@@ -60,8 +60,7 @@ class ASREngine:
                 self.model_name,
                 token=config.HF_TOKEN,
                 dtype=self.dtype,
-                device_map=device_map,
-                attn_implementation="sdpa" if self.device == "cuda" else None
+                device_map=device_map
             )
 
             if self.device == "cuda":
