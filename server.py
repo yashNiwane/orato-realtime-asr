@@ -171,18 +171,13 @@ async def websocket_transcribe(
                 except json.JSONDecodeError:
                     pass
 
+            if message["type"] == "websocket.disconnect":
+                break
+                
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected: session={session_id}")
     except Exception as e:
         logger.error(f"WebSocket error in session {session_id}: {e}", exc_info=True)
-    finally:
-        # Flush on disconnect
-        try:
-            flush_events = session.flush()
-            for event in flush_events:
-                await websocket.send_json(event)
-        except Exception:
-            pass
 
 
 # Mount Static Files for UI
