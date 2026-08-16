@@ -7,4 +7,5 @@ sample_test.wav
 test_audio.wav
 test.m4a
 kaggle_deploy/
+create_nb.py
 .cache/

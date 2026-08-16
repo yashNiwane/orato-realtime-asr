@@ -21,6 +21,10 @@
                 <h1 class="header-title">Hindi & Hinglish Realtime Speech Recognition</h1>
             </div>
             <div class="header-right">
+                <div class="endpoint-input-wrap">
+                    <input type="text" id="customEndpointInput" placeholder="Server: Local or Ngrok URL (e.g. https://xxxx.ngrok-free.app)" class="styled-endpoint-input">
+                    <button id="connectEndpointBtn" class="btn btn-secondary btn-sm">Connect</button>
+                </div>
                 <div class="status-chip" id="connectionStatus">
                     <span class="status-indicator"></span>
                     <span class="status-text">Connecting...</span>
@@ -89,7 +93,7 @@
                 <div class="card glass-card upload-card">
                     <div class="card-header">
                         <h3>Audio File Transcription</h3>
-                        <span class="sub-badge">WAV / MP3 / M4A / WebM</span>
+                        <span class="sub-badge">M4A / WAV / MP3 / WebM</span>
                     </div>
                     <div class="dropzone" id="dropZone">
                         <input type="file" id="audioFileInput" accept="audio/*" class="file-input-hidden">

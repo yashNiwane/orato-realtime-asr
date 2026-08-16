@@ -122,6 +122,37 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
+}
+
+.endpoint-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.styled-endpoint-input {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid var(--card-border);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    width: 290px;
+    outline: none;
+    transition: var(--transition);
+}
+
+.styled-endpoint-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-radius: var(--radius-sm);
 }
 
 .status-chip {

@@ -25,6 +25,8 @@ const audioFileInput = document.getElementById("audioFileInput");
 const uploadProgressWrap = document.getElementById("uploadProgressWrap");
 const waveformCanvas = document.getElementById("waveformCanvas");
 const canvasCtx = waveformCanvas.getContext("2d");
+const customEndpointInput = document.getElementById("customEndpointInput");
+const connectEndpointBtn = document.getElementById("connectEndpointBtn");
 
 // State
 let ws = null;
@@ -35,44 +37,92 @@ let isRecording = false;
 let confirmedUtterances = [];
 let analyser = null;
 let animFrameId = null;
+let activeBaseUrl = localStorage.getItem("orato_backend_url") || "";
+
+if (activeBaseUrl && customEndpointInput) {
+    customEndpointInput.value = activeBaseUrl;
+}
+
+// Compute WebSocket URL
+function getWsUrl() {
+    const selectedLang = languageSelect.value;
+    if (activeBaseUrl) {
+        let clean = activeBaseUrl.trim().replace(/\/+$/, "");
+        if (clean.startsWith("http://")) {
+            clean = "ws://" + clean.substring(7);
+        } else if (clean.startsWith("https://")) {
+            clean = "wss://" + clean.substring(8);
+        } else if (!clean.startsWith("ws://") && !clean.startsWith("wss://")) {
+            clean = "wss://" + clean;
+        }
+        return `${clean}/ws/transcribe?language=${encodeURIComponent(selectedLang)}`;
+    }
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/ws/transcribe?language=${encodeURIComponent(selectedLang)}`;
+}
+
+function getHttpBaseUrl() {
+    if (activeBaseUrl) {
+        let clean = activeBaseUrl.trim().replace(/\/+$/, "");
+        if (clean.startsWith("ws://")) {
+            clean = "http://" + clean.substring(5);
+        } else if (clean.startsWith("wss://")) {
+            clean = "https://" + clean.substring(6);
+        } else if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+            clean = "https://" + clean;
+        }
+        return clean;
+    }
+    return window.location.origin;
+}
 
 // Init WebSocket connection
 function initWebSocket() {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const selectedLang = languageSelect.value;
-    const wsUrl = `${protocol}//${window.location.host}/ws/transcribe?language=${encodeURIComponent(selectedLang)}`;
+    if (ws) {
+        try { ws.close(); } catch(e){}
+    }
 
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
+    const wsUrl = getWsUrl();
+    connectionStatus.className = "status-chip";
+    statusText.textContent = "Connecting...";
 
-    ws.onopen = () => {
-        connectionStatus.className = "status-chip connected";
-        statusText.textContent = "Connected";
-    };
+    try {
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "arraybuffer";
 
-    ws.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            handleServerMessage(data);
-        } catch (e) {
-            console.error("Error parsing WS message:", e);
-        }
-    };
+        ws.onopen = () => {
+            connectionStatus.className = "status-chip connected";
+            statusText.textContent = activeBaseUrl ? "Connected (Remote GPU)" : "Connected (Local)";
+            updateBackendInfo();
+        };
 
-    ws.onclose = () => {
-        connectionStatus.className = "status-chip disconnected";
-        statusText.textContent = "Disconnected (Retrying...)";
-        setTimeout(initWebSocket, 2000);
-    };
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                handleServerMessage(data);
+            } catch (e) {
+                console.error("Error parsing WS message:", e);
+            }
+        };
 
-    ws.onerror = (err) => {
-        console.error("WebSocket error:", err);
-    };
+        ws.onclose = () => {
+            connectionStatus.className = "status-chip disconnected";
+            statusText.textContent = "Disconnected (Retrying...)";
+        };
+
+        ws.onerror = (err) => {
+            console.error("WebSocket error:", err);
+            connectionStatus.className = "status-chip disconnected";
+            statusText.textContent = "Connection Failed";
+        };
+    } catch (err) {
+        console.error("WS Init error:", err);
+    }
 }
 
 function handleServerMessage(data) {
     if (data.type === "connected") {
-        statBackend.textContent = data.model.split("/").pop().split("\\").pop() || "Orato ASR";
+        statBackend.textContent = (data.model || "Orato ASR").split("/").pop().split("\\").pop();
     } else if (data.type === "speech_start") {
         vadBadge.className = "vad-badge speaking";
         vadBadge.textContent = "Speaking";
@@ -275,7 +325,8 @@ async function handleFileUpload(file) {
 
     try {
         const startTime = performance.now();
-        const response = await fetch("/api/v1/transcribe", {
+        const base = getHttpBaseUrl();
+        const response = await fetch(`${base}/api/v1/transcribe`, {
             method: "POST",
             body: formData
         });
@@ -356,6 +407,21 @@ clearBtn.addEventListener("click", () => {
     }
 });
 
+// Custom Endpoint Connect Button
+if (connectEndpointBtn && customEndpointInput) {
+    connectEndpointBtn.addEventListener("click", () => {
+        const val = customEndpointInput.value.trim();
+        activeBaseUrl = val;
+        localStorage.setItem("orato_backend_url", val);
+        initWebSocket();
+    });
+    customEndpointInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            connectEndpointBtn.click();
+        }
+    });
+}
+
 // Drag & Drop
 dropZone.addEventListener("click", () => audioFileInput.click());
 dropZone.addEventListener("dragover", (e) => {
@@ -382,15 +448,19 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Fetch backend health info on load
-fetch("/health")
-    .then(r => r.json())
-    .then(data => {
-        if (data.model) {
-            statBackend.textContent = data.model.split("/").pop().split("\\").pop();
-        }
-    })
-    .catch(() => {});
+function updateBackendInfo() {
+    const base = getHttpBaseUrl();
+    fetch(`${base}/health`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.model) {
+                statBackend.textContent = (data.model || "").split("/").pop().split("\\").pop() + (data.device ? ` (${data.device.toUpperCase()})` : "");
+            }
+        })
+        .catch(() => {});
+}
 
 // Initialize on page load
-window.addEventListener("DOMContentLoaded", initWebSocket);
+window.addEventListener("DOMContentLoaded", () => {
+    initWebSocket();
+});
