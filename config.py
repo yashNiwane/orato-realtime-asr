@@ -58,3 +58,17 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 GPU_WORKERS = int(os.getenv("GPU_WORKERS", "1"))  # serialized GPU inference across sessions
+
+# Voice Agent (ASR -> LLM pipeline; LLM served by vLLM on a second GPU, port 8001)
+AGENT_ENABLED = os.getenv("AGENT_ENABLED", "true").lower() in ("true", "1", "yes")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8001/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-4-E2B-it-qat-w4a16-ct")  # 4-bit QAT for vLLM; ungated
+AGENT_SYSTEM_PROMPT = os.getenv("AGENT_SYSTEM_PROMPT", (
+    "You are Orato, a friendly Hindi/Hinglish voice calling assistant. "
+    "Reply in the same language and tone the user uses (Hindi, Hinglish, or English). "
+    "Keep replies short and natural for speech: 1-3 simple sentences, no lists, no markdown, no emojis."
+))
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "256"))
+AGENT_TEMPERATURE = float(os.getenv("AGENT_TEMPERATURE", "0.7"))
+AGENT_HISTORY_LIMIT = int(os.getenv("AGENT_HISTORY_LIMIT", "16"))  # messages kept per session
+LLM_TIMEOUT_SEC = float(os.getenv("LLM_TIMEOUT_SEC", "30"))

@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 import config
 from asr_engine import ASREngine, StreamingSession
+from agent import VoiceAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ASRServer")
@@ -24,7 +25,10 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing ASR Engine...")
     app.state.gpu_pool = ThreadPoolExecutor(max_workers=config.GPU_WORKERS, thread_name_prefix="asr-gpu")
     engine = ASREngine.get_instance()
+    app.state.agent = VoiceAgent()
     logger.info(f"ASR Service Ready! Model: {config.MODEL_NAME_OR_PATH} on {engine.device} ({engine.dtype}) via {engine.backend} backend")
+    if config.AGENT_ENABLED:
+        logger.info(f"Voice Agent enabled -> LLM: {config.LLM_MODEL} @ {config.LLM_BASE_URL}")
     yield
     logger.info("Shutting down ASR Service...")
     app.state.gpu_pool.shutdown(wait=False, cancel_futures=True)
@@ -142,11 +146,26 @@ async def websocket_transcribe(
                 # Serialize GPU work through the dedicated single-worker pool
                 loop = asyncio.get_running_loop()
                 events = await loop.run_in_executor(app.state.gpu_pool, session.process_chunk, pcm_chunk)
-                
+
                 for event in events:
                     if websocket.client_state.name == "CONNECTED":
                         logger.info(f"[WS EVENT -> {session_id}] type={event.get('type')}, text='{event.get('text', '')}', latency={event.get('latency_ms')}ms")
                         await websocket.send_json(event)
+
+                # Voice Agent: chain finalized user utterances through the LLM
+                if app.state.agent.enabled:
+                    for event in events:
+                        if event.get("type") != "final":
+                            continue
+                        reply = await asyncio.to_thread(
+                            app.state.agent.process_final,
+                            session_id,
+                            event.get("text", ""),
+                            event.get("language"),
+                        )
+                        if reply and websocket.client_state.name == "CONNECTED":
+                            logger.info(f"[WS AGENT -> {session_id}] text='{reply['text']}', latency={reply['latency_ms']}ms")
+                            await websocket.send_json(reply)
             except Exception as e:
                 logger.error(f"[WS PROCESS ERROR {session_id}]: {e}", exc_info=True)
 
@@ -197,6 +216,7 @@ async def websocket_transcribe(
                             engine=engine,
                             language=payload.get("language", session.language)
                         )
+                        app.state.agent.reset(session_id)
                         await websocket.send_json({
                             "type": "reset_ack",
                             "session_id": session_id
@@ -211,6 +231,7 @@ async def websocket_transcribe(
     finally:
         stop_event.set()
         worker_task.cancel()
+        app.state.agent.reset(session_id)
         logger.info(f"[WS CLEANUP COMPLETE] session={session_id}")
 
 

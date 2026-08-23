@@ -88,6 +88,8 @@ async def stream_mic(server_url: str = f"ws://127.0.0.1:{config.PORT}/ws/transcr
                         lat = event.get("latency_ms", 0)
                         print(f"\r✨ {txt}  (⏱️ {lat}ms)\n", flush=True)
                         last_partial = ""
+                    elif etype == "agent_reply":
+                        print(f"\r🤖 {event.get('text', '')}\n", flush=True)
                     elif etype == "speech_end":
                         pass
             except websockets.exceptions.ConnectionClosed:
@@ -144,6 +146,8 @@ async def stream_file(file_path: str, server_url: str = f"ws://127.0.0.1:{config
                         latency = event.get("latency_ms", 0)
                         print(f"\r✨ [Final] {text} (⏱️ {latency}ms)\n", flush=True)
                         last_partial = ""
+                    elif etype == "agent_reply":
+                        print(f"\r🤖 [Agent] {event.get('text', '')}\n", flush=True)
             except websockets.exceptions.ConnectionClosed:
                 pass
             except Exception as e:
