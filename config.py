@@ -61,8 +61,8 @@ GPU_WORKERS = int(os.getenv("GPU_WORKERS", "1"))  # serialized GPU inference acr
 
 # Voice Agent (ASR -> LLM pipeline; LLM served by vLLM on a second GPU, port 8001)
 AGENT_ENABLED = os.getenv("AGENT_ENABLED", "true").lower() in ("true", "1", "yes")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8001/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-4-E2B-it-qat-w4a16-ct")  # 4-bit QAT for vLLM; ungated
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma4:e2b-it-qat")  # official Google QAT Q4_0 via Ollama
 AGENT_SYSTEM_PROMPT = os.getenv("AGENT_SYSTEM_PROMPT", (
     "You are Orato, a friendly Hindi/Hinglish voice calling assistant. "
     "Reply in the same language and tone the user uses (Hindi, Hinglish, or English). "
