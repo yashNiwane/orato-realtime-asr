@@ -39,7 +39,7 @@ async def stream_mic(server_url: str = f"ws://127.0.0.1:{config.PORT}/ws/transcr
     url = f"{server_url}?language={language}"
     print(f"[*] Connecting to WebSocket: {url}...")
 
-    async with websockets.connect(url) as ws:
+    async with websockets.connect(url, ping_interval=20, ping_timeout=120) as ws:
         init_msg = await ws.recv()
         print(f"[+] Connected to Orato ASR Server!")
         print("[*] 🎙️  MICROPHONE ACTIVE: Start speaking Hindi / Hinglish now! (Press Ctrl+C to stop)")
@@ -121,7 +121,7 @@ async def stream_file(file_path: str, server_url: str = f"ws://127.0.0.1:{config
     url = f"{server_url}?language={language}"
     print(f"[*] Connecting to WebSocket: {url}...")
 
-    async with websockets.connect(url) as ws:
+    async with websockets.connect(url, ping_interval=20, ping_timeout=120) as ws:
         init_msg = await ws.recv()
         print(f"[+] Server Connected: {init_msg}")
 

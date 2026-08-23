@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Orato Realtime Hindi ASR Service",
-    description="Real-time and batch Speech Recognition powered by orato-asr-hindi-v1",
+    description="Real-time and batch Speech Recognition powered by Qwen3-ASR",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -160,10 +160,11 @@ async def websocket_transcribe(
                 logger.info(f"[WS DISCONNECT MSG] session={session_id}")
                 break
 
-            # Binary PCM Audio Stream
+            # Binary PCM Audio Stream (raw 16-bit LE from clients - decode directly,
+            # bypassing load_audio's format sniffing which probes MP3/AV per chunk)
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
-                pcm_chunk = ASREngine.bytes_to_pcm16k(raw_bytes)
+                pcm_chunk = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 if not audio_queue.full():
                     audio_queue.put_nowait(pcm_chunk)
                 else:
