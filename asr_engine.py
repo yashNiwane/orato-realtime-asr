@@ -1,5 +1,6 @@
 import time
 import logging
+import importlib.util
 import numpy as np
 import torch
 from typing import Dict, Any, Optional, List, Union
@@ -19,6 +20,7 @@ class ASREngine:
     def __init__(self):
         self.device = self._select_device()
         self.dtype = self._select_dtype()
+        self.backend = self._select_backend()
         self.model_name = config.MODEL_NAME_OR_PATH
         self.model: Optional[qwen_asr.Qwen3ASRModel] = None
         self.is_ready = False
@@ -35,6 +37,13 @@ class ASREngine:
             return config.DEVICE
         return "cuda" if torch.cuda.is_available() else "cpu"
 
+    def _select_backend(self) -> str:
+        if config.ASR_BACKEND in ("transformers", "vllm"):
+            return config.ASR_BACKEND
+        if self.device == "cuda" and importlib.util.find_spec("vllm") is not None:
+            return "vllm"
+        return "transformers"
+
     def _select_dtype(self) -> torch.dtype:
         if config.TORCH_DTYPE == "bfloat16":
             return torch.bfloat16
@@ -49,30 +58,38 @@ class ASREngine:
         return torch.float32
 
     def _load_model(self):
-        logger.info(f"Loading ASR model '{self.model_name}' on device '{self.device}' with dtype '{self.dtype}' (Quantization: {config.QUANTIZATION})...")
+        logger.info(f"Loading ASR model '{self.model_name}' on device '{self.device}' with dtype '{self.dtype}' (Backend: {self.backend}, Quantization: {config.QUANTIZATION})...")
         start_time = time.perf_counter()
 
         try:
-            device_map = "auto" if self.device == "cuda" else self.device
-            kwargs = {
-                "token": config.HF_TOKEN,
-                "dtype": self.dtype,
-                "device_map": device_map
-            }
+            if self.backend == "vllm":
+                self.model = qwen_asr.Qwen3ASRModel.LLM(
+                    model=self.model_name,
+                    gpu_memory_utilization=config.VLLM_GPU_MEMORY_UTILIZATION,
+                    max_new_tokens=config.VLLM_MAX_NEW_TOKENS,
+                    max_inference_batch_size=config.VLLM_MAX_BATCH_SIZE,
+                )
+            else:
+                device_map = "auto" if self.device == "cuda" else self.device
+                kwargs = {
+                    "token": config.HF_TOKEN,
+                    "dtype": self.dtype,
+                    "device_map": device_map
+                }
 
-            if config.QUANTIZATION in ("8bit", "int8"):
-                kwargs["load_in_8bit"] = True
-            elif config.QUANTIZATION in ("4bit", "int4"):
-                kwargs["load_in_4bit"] = True
+                if config.QUANTIZATION in ("8bit", "int8"):
+                    kwargs["load_in_8bit"] = True
+                elif config.QUANTIZATION in ("4bit", "int4"):
+                    kwargs["load_in_4bit"] = True
 
-            # Load with HF Token
-            self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
-                self.model_name,
-                **kwargs
-            )
+                # Load with HF Token
+                self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
+                    self.model_name,
+                    **kwargs
+                )
 
-            if self.device == "cuda" and not (kwargs.get("load_in_8bit") or kwargs.get("load_in_4bit")):
-                self.model.model = self.model.model.to("cuda")
+                if self.device == "cuda" and not (kwargs.get("load_in_8bit") or kwargs.get("load_in_4bit")):
+                    self.model.model = self.model.model.to("cuda")
 
             load_elapsed = time.perf_counter() - start_time
             self.is_ready = True
@@ -85,6 +102,7 @@ class ASREngine:
     def get_model_info(self) -> Dict[str, Any]:
         return {
             "model_name": self.model_name,
+            "backend": self.backend,
             "device": self.device,
             "dtype": str(self.dtype),
             "is_ready": self.is_ready,
@@ -113,6 +131,22 @@ class ASREngine:
 
         t0 = time.perf_counter()
         forced_lang = normalize_language_name(language) if language else None
+
+        if self.backend == "vllm":
+            results = self.model.transcribe(
+                audio=(np.asarray(wav, dtype=np.float32), config.SAMPLE_RATE),
+                context=context or "",
+                language=forced_lang
+            )
+            res = results[0] if results else None
+            lang, txt = (res.language, res.text) if res else (language, "")
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            return {
+                "text": txt.strip(),
+                "language": lang or language,
+                "latency_ms": round(elapsed_ms, 1)
+            }
+
         prompt_text = self.model._build_text_prompt(context=context, force_language=forced_lang)
 
         inputs = self.model.processor(
@@ -142,6 +176,35 @@ class ASREngine:
         return {
             "text": txt.strip(),
             "language": lang or language,
+            "latency_ms": round(elapsed_ms, 1)
+        }
+
+    def supports_native_streaming(self) -> bool:
+        return (
+            config.STREAM_USE_NATIVE_VLLM
+            and self.backend == "vllm"
+            and self.is_ready
+            and hasattr(self.model, "init_streaming_state")
+        )
+
+    def init_stream(self):
+        """
+        Create a native incremental streaming state (vLLM backend only).
+        Audio fed via stream_feed() is decoded incrementally instead of re-decoding a sliding window.
+        """
+        return self.model.init_streaming_state(
+            unfixed_chunk_num=config.STREAM_UNFIXED_CHUNKS,
+            unfixed_token_num=config.STREAM_UNFIXED_TOKENS,
+            chunk_size_sec=config.STREAM_NATIVE_CHUNK_SEC
+        )
+
+    def stream_feed(self, pcm: np.ndarray, state: Any) -> Dict[str, Any]:
+        t0 = time.perf_counter()
+        self.model.streaming_transcribe(np.asarray(pcm, dtype=np.float32), state)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        return {
+            "text": str(getattr(state, "text", "") or "").strip(),
+            "language": getattr(state, "language", None),
             "latency_ms": round(elapsed_ms, 1)
         }
 
@@ -230,6 +293,7 @@ class StreamingSession:
         self.is_speaking = False
         self.confirmed_transcript = ""
         self.last_partial_transcript = ""
+        self.native_state: Any = None
 
     def process_chunk(self, pcm_chunk: np.ndarray) -> List[Dict[str, Any]]:
         """
@@ -248,6 +312,12 @@ class StreamingSession:
             self.silence_counter = 0
             if not self.is_speaking:
                 self.is_speaking = True
+                if self.engine.supports_native_streaming():
+                    try:
+                        self.native_state = self.engine.init_stream()
+                    except Exception as e:
+                        logger.warning(f"[{self.session_id}] Native stream init failed ({e}); using windowed decode")
+                        self.native_state = None
                 events.append({
                     "type": "speech_start",
                     "session_id": self.session_id,
@@ -282,6 +352,7 @@ class StreamingSession:
             self.audio_buffer = np.zeros((0,), dtype=np.float32)
             self.is_speaking = False
             self.last_partial_transcript = ""
+            self.native_state = None
             events.append({
                 "type": "speech_end",
                 "session_id": self.session_id
@@ -290,14 +361,25 @@ class StreamingSession:
 
         # Live Interim Partial Decode while speaking
         if self.is_speaking and len(self.audio_buffer) >= self.chunk_samples:
-            # Decode the current sliding window
             segment = self.utterance_buffer[-self.context_samples:]
-            partial_res = self.engine.fast_stream_infer(
-                wav=segment,
-                context=self.confirmed_transcript[-80:] if self.confirmed_transcript else "",
-                language=self.language,
-                max_tokens=config.MAX_STREAM_TOKENS
-            )
+            partial_res = None
+
+            # Preferred: native incremental decode (no re-encoding of history)
+            if self.native_state is not None:
+                try:
+                    partial_res = self.engine.stream_feed(self.audio_buffer, self.native_state)
+                except Exception as e:
+                    logger.warning(f"[{self.session_id}] Native stream failed ({e}); falling back to windowed decode")
+                    self.native_state = None
+
+            # Fallback: sliding-window re-decode (transformers backend or native failure)
+            if partial_res is None:
+                partial_res = self.engine.fast_stream_infer(
+                    wav=segment,
+                    context=self.confirmed_transcript[-80:] if self.confirmed_transcript else "",
+                    language=self.language,
+                    max_tokens=config.MAX_STREAM_TOKENS
+                )
             partial_text = partial_res["text"].strip()
             
             if partial_text and partial_text != "<unintelligible>" and partial_text != self.last_partial_transcript:
@@ -343,4 +425,5 @@ class StreamingSession:
         self.utterance_buffer = np.zeros((0,), dtype=np.float32)
         self.is_speaking = False
         self.last_partial_transcript = ""
+        self.native_state = None
         return events

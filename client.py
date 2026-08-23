@@ -191,8 +191,28 @@ def main():
 
     args = parser.parse_args()
 
+    host = args.host.strip().rstrip("/")
+    if host.startswith("https://"):
+        ws_prefix = "wss://" + host[8:]
+        http_prefix = host
+    elif host.startswith("http://"):
+        ws_prefix = "ws://" + host[7:]
+        http_prefix = host
+    elif host.startswith("wss://"):
+        ws_prefix = host
+        http_prefix = "https://" + host[6:]
+    elif host.startswith("ws://"):
+        ws_prefix = host
+        http_prefix = "http://" + host[5:]
+    elif "ngrok" in host or "trycloudflare" in host:
+        ws_prefix = f"wss://{host}"
+        http_prefix = f"https://{host}"
+    else:
+        ws_prefix = f"ws://{host}"
+        http_prefix = f"http://{host}"
+
     if args.mode == "mic":
-        ws_url = f"ws://{args.host}/ws/transcribe"
+        ws_url = f"{ws_prefix}/ws/transcribe"
         try:
             asyncio.run(stream_mic(ws_url, args.language))
         except KeyboardInterrupt:
@@ -208,10 +228,10 @@ def main():
         sys.exit(1)
 
     if args.mode == "stream":
-        ws_url = f"ws://{args.host}/ws/transcribe"
+        ws_url = f"{ws_prefix}/ws/transcribe"
         asyncio.run(stream_file(args.file, ws_url, args.language))
     else:
-        rest_url = f"http://{args.host}/api/v1/transcribe"
+        rest_url = f"{http_prefix}/api/v1/transcribe"
         transcribe_file_rest(args.file, rest_url, args.language)
 
 

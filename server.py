@@ -2,6 +2,7 @@ import uuid
 import json
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -21,10 +22,12 @@ logger = logging.getLogger("ASRServer")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing ASR Engine...")
+    app.state.gpu_pool = ThreadPoolExecutor(max_workers=config.GPU_WORKERS, thread_name_prefix="asr-gpu")
     engine = ASREngine.get_instance()
-    logger.info(f"ASR Service Ready! Model: {config.MODEL_NAME_OR_PATH} on {engine.device} ({engine.dtype})")
+    logger.info(f"ASR Service Ready! Model: {config.MODEL_NAME_OR_PATH} on {engine.device} ({engine.dtype}) via {engine.backend} backend")
     yield
     logger.info("Shutting down ASR Service...")
+    app.state.gpu_pool.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(
@@ -50,6 +53,7 @@ async def health_check():
     return {
         "status": "healthy" if engine.is_ready else "loading",
         "model": config.MODEL_NAME_OR_PATH,
+        "backend": engine.backend,
         "device": engine.device,
         "dtype": str(engine.dtype),
         "is_ready": engine.is_ready
@@ -135,9 +139,9 @@ async def websocket_transcribe(
                 break
 
             try:
-                # Run inference in worker thread pool so event loop is completely free for ping/pong
+                # Serialize GPU work through the dedicated single-worker pool
                 loop = asyncio.get_running_loop()
-                events = await loop.run_in_executor(None, session.process_chunk, pcm_chunk)
+                events = await loop.run_in_executor(app.state.gpu_pool, session.process_chunk, pcm_chunk)
                 
                 for event in events:
                     if websocket.client_state.name == "CONNECTED":
@@ -182,7 +186,7 @@ async def websocket_transcribe(
 
                     elif action == "flush":
                         loop = asyncio.get_running_loop()
-                        events = await loop.run_in_executor(None, session.flush)
+                        events = await loop.run_in_executor(app.state.gpu_pool, session.flush)
                         for event in events:
                             await websocket.send_json(event)
 

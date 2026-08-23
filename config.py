@@ -29,6 +29,14 @@ DEVICE = os.getenv("DEVICE", "auto")  # "auto", "cuda", "cpu"
 TORCH_DTYPE = os.getenv("TORCH_DTYPE", "auto")  # "auto", "bfloat16", "float16", "float32"
 QUANTIZATION = os.getenv("QUANTIZATION", "none").lower()  # "none", "int8", "8bit", "int4", "4bit"
 
+# Inference backend: "auto" (vLLM on CUDA if installed, else transformers), "transformers", or "vllm"
+ASR_BACKEND = os.getenv("ASR_BACKEND", "auto").lower()
+
+# vLLM backend settings (requires `pip install -U qwen-asr[vllm]`)
+VLLM_GPU_MEMORY_UTILIZATION = float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.85"))
+VLLM_MAX_NEW_TOKENS = int(os.getenv("VLLM_MAX_NEW_TOKENS", "256"))
+VLLM_MAX_BATCH_SIZE = int(os.getenv("VLLM_MAX_BATCH_SIZE", "32"))
+
 # Realtime Streaming Settings
 STREAM_CHUNK_DURATION = float(os.getenv("STREAM_CHUNK_DURATION", "0.4"))  # 400ms per interim decode for rapid updates
 STREAM_CONTEXT_DURATION = float(os.getenv("STREAM_CONTEXT_DURATION", "3.0")) # context buffer history
@@ -36,7 +44,14 @@ VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.003")) # sensi
 SILENCE_DURATION_FLUSH = float(os.getenv("SILENCE_DURATION_FLUSH", "0.8")) # 800ms of silence to finalize sentence
 MAX_STREAM_TOKENS = int(os.getenv("MAX_STREAM_TOKENS", "24")) # token limit for fast interim decoding
 
+# Native incremental streaming (vLLM backend only). Falls back to windowed re-decode if disabled/unavailable.
+STREAM_USE_NATIVE_VLLM = os.getenv("STREAM_USE_NATIVE_VLLM", "true").lower() in ("true", "1", "yes")
+STREAM_UNFIXED_CHUNKS = int(os.getenv("STREAM_UNFIXED_CHUNKS", "2"))   # trailing chunks eligible for revision
+STREAM_UNFIXED_TOKENS = int(os.getenv("STREAM_UNFIXED_TOKENS", "5"))   # trailing tokens eligible for revision
+STREAM_NATIVE_CHUNK_SEC = float(os.getenv("STREAM_NATIVE_CHUNK_SEC", "2.0"))
+
 # Server settings
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+GPU_WORKERS = int(os.getenv("GPU_WORKERS", "1"))  # serialized GPU inference across sessions
